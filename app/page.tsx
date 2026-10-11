@@ -2,8 +2,22 @@
 
 import Image from "next/image";
 import { useState, useCallback, useEffect } from "react";
+import { client } from "@/sanity/lib/client";
+import { PROJECTS_QUERY } from "@/sanity/lib/queries";
+import { urlForImage } from "@/sanity/lib/image";
 
-const TV_PROJECTS = [
+export interface TvProjectItem {
+  id: string | number;
+  title: string;
+  category: string;
+  year: string;
+  desc: string;
+  image: string;
+  mediaType?: "image" | "video";
+  videoUrl?: string;
+}
+
+const DEFAULT_TV_PROJECTS: TvProjectItem[] = [
   {
     id: 1,
     title: "DEMO #1",
@@ -11,6 +25,7 @@ const TV_PROJECTS = [
     year: "2026",
     desc: "Distillery brand identity and custom e-commerce experience crafted for a rare Kentucky spirit.",
     image: "https://via.placeholder.com/800x600/18181b/ffbf47.png?text=DEMO+%231",
+    mediaType: "image",
   },
   {
     id: 2,
@@ -19,6 +34,7 @@ const TV_PROJECTS = [
     year: "2026",
     desc: "Social sports betting platform built for friends — reimagined with bold retro typography and seamless UX.",
     image: "https://via.placeholder.com/800x600/0f172a/38bdf8.png?text=DEMO+%232",
+    mediaType: "image",
   },
   {
     id: 3,
@@ -27,6 +43,7 @@ const TV_PROJECTS = [
     year: "2025",
     desc: "Comprehensive digital presence and visual language for a premier mixed-use architectural development.",
     image: "https://via.placeholder.com/800x600/052e16/4ade80.png?text=DEMO+%233",
+    mediaType: "image",
   },
   {
     id: 4,
@@ -35,6 +52,7 @@ const TV_PROJECTS = [
     year: "2025",
     desc: "Patient-first digital ecosystem providing transparent access to supportive healthcare services.",
     image: "https://via.placeholder.com/800x600/3b0764/f472b6.png?text=DEMO+%234",
+    mediaType: "image",
   },
   {
     id: 5,
@@ -43,6 +61,7 @@ const TV_PROJECTS = [
     year: "2025",
     desc: "Modular fitness apparatus companion app featuring real-time biometric metrics tracking.",
     image: "https://via.placeholder.com/800x600/431407/fb923c.png?text=DEMO+%235",
+    mediaType: "image",
   },
 ];
 
@@ -80,13 +99,76 @@ const PILLARS = [
 ];
 
 export default function Home() {
+  const [projects, setProjects] = useState<TvProjectItem[]>(DEFAULT_TV_PROJECTS);
   const [currentChannel, setCurrentChannel] = useState(0);
   const [isTuning, setIsTuning] = useState(false);
-  const [displayedText, setDisplayedText] = useState(TV_PROJECTS[0].title);
+  const [displayedText, setDisplayedText] = useState(DEFAULT_TV_PROJECTS[0].title);
   const [isLoading, setIsLoading] = useState(true);
   const [progressWidth, setProgressWidth] = useState("w-0");
   const [isIntroLoaded, setIsIntroLoaded] = useState(false);
   const [scrollY, setScrollY] = useState(0);
+  const [hasChannelChanged, setHasChannelChanged] = useState(false);
+
+  // Fetch projects from Sanity setup
+  useEffect(() => {
+    let isMounted = true;
+    client
+      .fetch(PROJECTS_QUERY)
+      .then((sanityProjects) => {
+        if (!isMounted || !sanityProjects || sanityProjects.length === 0) return;
+
+        const mapped: TvProjectItem[] = sanityProjects.map((p: any, idx: number) => {
+          let imageUrl = "";
+          if (p.image?.asset?.url) {
+            imageUrl = p.image.asset.url;
+          } else if (p.image?.asset) {
+            try {
+              imageUrl = urlForImage(p.image).width(800).height(600).url();
+            } catch {
+              imageUrl = "";
+            }
+          } else if (p.imageUrl) {
+            imageUrl = p.imageUrl;
+          }
+
+          const videoUrl = p.videoFile?.asset?.url || p.videoUrl || "";
+          const mediaType = (p.mediaType as "image" | "video") || (videoUrl ? "video" : "image");
+
+          return {
+            id: p._id || `sanity-${idx}`,
+            title: p.title || `PROJECT #${idx + 1}`,
+            category:
+              p.category ||
+              (mediaType === "video" ? "Motion \\ Video Production" : "Branding \\ Visual System"),
+            year: p.year || "2026",
+            desc:
+              p.desc ||
+              (mediaType === "video"
+                ? "Curated motion piece featured on the retro TV terminal."
+                : "Curated brand identity and visual showcase on the retro TV terminal."),
+            image:
+              imageUrl ||
+              (mediaType === "video"
+                ? ""
+                : `https://via.placeholder.com/800x600/18181b/ffbf47.png?text=PROJECT+${idx + 1}`),
+            mediaType,
+            videoUrl,
+          };
+        });
+
+        if (mapped.length > 0) {
+          setProjects(mapped);
+          setDisplayedText(mapped[0]?.title || "");
+        }
+      })
+      .catch((err) => {
+        console.warn("Could not fetch Sanity projects, using defaults:", err);
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
 
   // 2-second loading screen to let all assets load into browser cache
   useEffect(() => {
@@ -121,7 +203,8 @@ export default function Home() {
   useEffect(() => {
     if (isTuning) return;
 
-    const target = TV_PROJECTS[currentChannel].title;
+    const active = projects[currentChannel] || projects[0];
+    const target = active?.title || "";
     let charIndex = 0;
 
     const interval = setInterval(() => {
@@ -133,32 +216,34 @@ export default function Home() {
     }, 45); // 45ms per character
 
     return () => clearInterval(interval);
-  }, [currentChannel, isTuning]);
+  }, [currentChannel, isTuning, projects]);
 
   // Cycle channels with a 200ms static burst transition
   const changeChannel = useCallback(
     (direction: "next" | "prev") => {
-      if (isTuning) return;
+      if (isTuning || projects.length === 0) return;
       setIsTuning(true);
+      setHasChannelChanged(true);
       setDisplayedText("");
 
       const nextIndex =
         direction === "next"
-          ? (currentChannel + 1) % TV_PROJECTS.length
-          : (currentChannel - 1 + TV_PROJECTS.length) % TV_PROJECTS.length;
+          ? (currentChannel + 1) % projects.length
+          : (currentChannel - 1 + projects.length) % projects.length;
 
       setTimeout(() => {
         setCurrentChannel(nextIndex);
         setIsTuning(false);
       }, 200);
     },
-    [currentChannel, isTuning]
+    [currentChannel, isTuning, projects.length]
   );
 
   const tuneToChannel = useCallback(
     (idx: number) => {
       if (currentChannel === idx || isTuning) return;
       setIsTuning(true);
+      setHasChannelChanged(true);
       setDisplayedText("");
 
       setTimeout(() => {
@@ -181,15 +266,14 @@ export default function Home() {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [changeChannel]);
 
-  const activeProject = TV_PROJECTS[currentChannel];
+  const activeProject = projects[currentChannel] || projects[0] || DEFAULT_TV_PROJECTS[0];
 
   return (
     <div className="w-full min-h-screen overflow-x-clip bg-[#0c0a09] text-[#e6e4e2] font-sans antialiased selection:bg-[#ffbf47] selection:text-black">
       {/* 2-Second Asset Loading Screen Overlay */}
       <div
-        className={`fixed inset-0 z-50 flex flex-col items-center justify-center bg-[#0c0a09] transition-opacity duration-500 select-none ${
-          isLoading ? "opacity-100 pointer-events-auto" : "opacity-0 pointer-events-none"
-        }`}
+        className={`fixed inset-0 z-50 flex flex-col items-center justify-center bg-[#0c0a09] transition-opacity duration-500 select-none ${isLoading ? "opacity-100 pointer-events-auto" : "opacity-0 pointer-events-none"
+          }`}
         aria-hidden={!isLoading}
       >
         <div className="flex flex-col items-center gap-4">
@@ -209,21 +293,20 @@ export default function Home() {
           </span>
         </div>
       </div>
+
       {/* 
         ========================================================================
         HERO / TV SHOWCASE SECTION
-        - Lower dimensions: h-[108vw] min-h-[380px]
+        - Lower dimensions & Tablet (< lg): h-[108vw] min-h-[380px]
           Foreground sits at top/center, header cuts off right after desk.
-        - Desktop (md:): h-dvh full viewport immersion.
+        - Desktop (lg:): h-dvh full viewport immersion.
         ========================================================================
       */}
-      <header className="relative w-full h-[108vw] min-h-[380px] md:h-dvh overflow-hidden bg-black select-none">
-
+      <header className="relative w-full h-[108vw] min-h-[380px] lg:h-dvh overflow-hidden bg-black select-none">
         {/* Background & Midground Layers: Studio room + anglepoise lamp */}
         <div
-          className={`absolute inset-0 z-0 overflow-hidden pointer-events-none transition-[filter] duration-1000 ease-out ${
-            isIntroLoaded ? "blur-none" : "blur-xl"
-          }`}
+          className={`absolute inset-0 z-0 overflow-hidden pointer-events-none transition-[filter] duration-1000 ease-out ${isIntroLoaded ? "blur-none" : "blur-xl"
+            }`}
           style={{
             transform: `translate3d(0, ${scrollY * 0.35}px, 0)`,
           }}
@@ -257,11 +340,12 @@ export default function Home() {
             w-[210%]
             min-[480px]:w-[180%]
             sm:w-[175%]
-            md:w-[138%]
+            md:w-[148%]
             lg:w-[125%]
             xl:w-[135%]
             2xl:w-[148%]
             max-w-[calc(95dvh*1440/580)]
+            lg:max-w-[calc(95dvh*1440/620)]
             origin-bottom transition-transform duration-1000 ease-out
             ${isIntroLoaded ? "scale-100" : "scale-[0.88]"}`}
         >
@@ -270,26 +354,62 @@ export default function Home() {
             className="absolute z-0 left-[48.3%] top-[5%] -translate-x-[51%] w-[30%] h-[46%] overflow-hidden rounded-[4%] bg-black pointer-events-auto"
             tabIndex={0}
             role="region"
-            aria-label={`Television display: ${activeProject.title}`}
+            aria-label={`Television display: ${activeProject?.title || "Project"}`}
           >
-            {/* Project Images (Pre-rendered for instantaneous switching) */}
-            {TV_PROJECTS.map((project, idx) => (
-              <div
-                key={project.id}
-                className={`absolute inset-0 transition-opacity duration-150 ${!isTuning && currentChannel === idx ? "opacity-100 z-[1]" : "opacity-0 z-0"
-                  }`}
-              >
-                <Image
-                  src={project.image}
-                  alt={project.title}
-                  fill
-                  unoptimized
-                  priority={idx === 0}
-                  sizes="(max-width: 768px) 66vw, 30vw"
-                  className="object-cover"
-                />
-              </div>
-            ))}
+            {/* Project Media */}
+            {projects.map((project, idx) => {
+              const isActive = !isTuning && currentChannel === idx;
+              const shouldPlayVideo = isActive && hasChannelChanged;
+
+              return (
+                <div
+                  key={project.id}
+                  className={`absolute inset-0 transition-opacity duration-150 ${isActive ? "opacity-100 z-[1]" : "opacity-0 z-0 pointer-events-none"
+                    }`}
+                >
+                  {project.mediaType === "video" && project.videoUrl ? (
+                    shouldPlayVideo ? (
+                      <video
+                        key={`vid-${project.id}-${currentChannel}`}
+                        src={project.videoUrl}
+                        autoPlay
+                        loop
+                        playsInline
+                        muted
+                        className="w-full h-full object-cover"
+                      />
+                    ) : project.image ? (
+                      <Image
+                        src={project.image}
+                        alt={project.title}
+                        fill
+                        unoptimized
+                        sizes="(max-width: 768px) 66vw, 30vw"
+                        className="object-cover"
+                      />
+                    ) : (
+                      <div className="w-full h-full flex items-center justify-center bg-zinc-900 text-zinc-500 font-mono text-xs">
+                        STANDBY
+                      </div>
+                    )
+                  ) : project.image ? (
+                    <Image
+                      src={project.image}
+                      alt={project.title}
+                      fill
+                      unoptimized
+                      priority={idx === 0}
+                      sizes="(max-width: 768px) 66vw, 30vw"
+                      className="object-cover"
+                    />
+                  ) : (
+                    <div className="w-full h-full flex items-center justify-center bg-zinc-900 text-zinc-500 font-mono text-xs">
+                      NO SIGNAL
+                    </div>
+                  )}
+                </div>
+              );
+            })}
 
             {/* TV Static Noise: Bursts at opacity-100 for 200ms during channel change */}
             <div
@@ -353,7 +473,7 @@ export default function Home() {
                     </span>
                   );
                 })}
-              {!isTuning && displayedText.length < activeProject.title.length && (
+              {!isTuning && displayedText.length < (activeProject?.title || "").length && (
                 <span className="inline-block w-[0.5em] h-[0.8em] bg-[#ffbf47] ml-0.5 animate-pulse align-middle" />
               )}
             </span>
@@ -475,12 +595,12 @@ export default function Home() {
               </h2>
             </div>
             <span className="text-xs uppercase tracking-widest text-[#ffbf47] font-mono">
-              [ 05 / 15 RECENT PROJECTS ]
+              [ {String(projects.length).padStart(2, "0")} RECENT PROJECTS ]
             </span>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-            {TV_PROJECTS.map((p, idx) => (
+            {projects.map((p, idx) => (
               <article
                 key={p.id}
                 onClick={() => tuneToChannel(idx)}
@@ -492,7 +612,7 @@ export default function Home() {
                 <div>
                   <div className="flex items-center justify-between text-xs font-mono text-zinc-400 mb-6">
                     <span className={currentChannel === idx ? "text-[#ffbf47] font-bold" : "text-zinc-400"}>
-                      CH 0{p.id} {currentChannel === idx && "● TUNED IN"}
+                      CH 0{idx + 1} {currentChannel === idx && "● TUNED IN"}
                     </span>
                     <span>{p.year}</span>
                   </div>
